@@ -6,7 +6,7 @@ from datetime import timedelta
 import time
 import random
 
-engine = create_engine('postgresql://postgres:postgres@10.16.121.111:5432/ufo')
+engine = create_engine('postgresql://postgres:postgres@10.17.117.5:5432/ufo')
 
 
 def load_sigthings(filename):
@@ -101,14 +101,25 @@ def fetch_weather(ufo_id, date, lat, lng):
 
 
 def load_weather():
-    df = pd.read_sql('ufo_sightings', engine)
+    query = """
+        SELECT ufo_sightings.index, ufo_sightings.sigthed_date, ufo_sightings.lat, ufo_sightings.lng
+        FROM ufo_sightings
+        LEFT OUTER JOIN weather ON ufo_sightings.sigthed_date = weather.date
+                    AND ufo_sightings.lat = weather.latitude
+                    AND ufo_sightings.lng = weather.longitude
+        WHERE weather.date is null AND ufo_sightings.sigthed_date > '1940-01-01';
+    """
+    df = pd.read_sql_query(query, engine)
+
     errors = []
-    chunks = np.array_split(df, 900)
-    arr = [339, 356, 480, 481, 500]
-    for i in range(502, len(chunks)):
+    chunks = np.array_split(df, int(len(df) / 50))
+
+    for i in range(len(chunks)):
         # for i in arr:
         chunk = chunks[i]
         print(f"Processing chunk {i}")
+        # print(len(chunk))
+        # time.sleep(100)
         time.sleep(random.randint(3, 7))
 
         params = {
@@ -155,6 +166,7 @@ def load_weather():
         else:
             print(f"Error fetching weather for chunk {i}")
             print(f'Error code: {response.status_code}')
+            print(response.text)
             errors.append(i)
             print(errors)
 

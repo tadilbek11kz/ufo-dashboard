@@ -1,0 +1,33 @@
+body {
+    margin: 0;
+    background-color: black;
+    color: white;
+}
+
+h3 {
+    margin: 0;
+    padding: 0;
+}
+
+.Select-control {
+    color: white !important;
+    background-color: #222222;
+}
+
+.Select-menu-outer {
+    color: white !important;
+    background-color: #222222;
+}
+
+.Select-value-label {
+    color: white !important;
+}
+
+.input {
+    background-color: #222222 !important;
+    color: white;
+}
+
+.rc-slider-track {
+    background-color: rgb(56, 56, 230);
+}

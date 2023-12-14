@@ -2,7 +2,7 @@ import pandas as pd
 import plotly.express as px
 # import folium
 from sqlalchemy import create_engine
-from dash import Dash, html, dcc, callback, Output, Input
+from dash import Dash, html, dcc, callback, Output, Input, callback_context
 from dash_daq import BooleanSwitch
 
 pd.options.plotting.backend = "plotly"
@@ -10,126 +10,258 @@ pd.options.plotting.backend = "plotly"
 external_stylesheets = ['https://codepen.io/chriddyp/pen/bWLwgP.css']
 app = Dash(__name__, external_stylesheets=external_stylesheets)
 
-engine = create_engine('postgresql://postgres:postgres@10.16.121.111:5432/ufo')
+engine = create_engine('postgresql://postgres:postgres@10.17.117.5:5432/ufo')
 
-cities = pd.read_sql_query('SELECT DISTINCT city FROM ufo_sightings', con=engine)
-cities = sorted([city.capitalize() for city in cities['city'].tolist()])
+cities = pd.read_sql_query('SELECT DISTINCT city FROM ufo_sightings', con=engine).sort_values(by='city').apply(lambda x: x.str.capitalize())['city'].tolist()
+states = pd.read_sql_query('SELECT DISTINCT state FROM ufo_sightings', con=engine).sort_values(by='state')['state'].tolist()
 shapes = pd.read_sql_query('SELECT DISTINCT shape FROM ufo_sightings', con=engine).sort_values(by='shape')['shape'].tolist()
 weather_condition = pd.read_sql_query('SELECT DISTINCT label FROM weather', con=engine).sort_values(by='label')['label'].tolist()
+max_year = pd.read_sql_query('SELECT MAX(EXTRACT(YEAR FROM sigthed_date)) AS max_year FROM ufo_sightings', con=engine)['max_year'].tolist()[0]
+min_year = pd.read_sql_query('SELECT MIN(EXTRACT(YEAR FROM sigthed_date)) AS min_year FROM ufo_sightings', con=engine)['min_year'].tolist()[0]
+daytime = pd.read_sql_query('SELECT DISTINCT daytime FROM ufo_sightings', con=engine)['daytime'].tolist()
 
 # ufo_sightings = pd.read_sql_query('SELECT * FROM ufo_sightings', con=engine)
 # weather = pd.read_sql_query('SELECT * FROM weather', con=engine)
 
+
+def density_graph():
+    query = f"""
+        SELECT lat, lng, COUNT(*) AS total_sightings
+        FROM ufo_sightings
+        GROUP BY lat, lng
+        ORDER BY total_sightings DESC
+    """
+    ufo_sightings = pd.read_sql_query(query, con=engine)
+
+    fig = px.density_mapbox(ufo_sightings, lat='lat', lon='lng', z='total_sightings', labels={'total_sightings': 'UFO count'}, radius=10, center=dict(lat=39.8283, lon=-98.5795), zoom=3, mapbox_style="open-street-map")
+    fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font={'color': 'white'})
+
+    return fig
+
+
+def heatmap_graph(type):
+    if type == 'population':
+        data = pd.read_csv('population.csv')
+        fig = px.choropleth(data, locations="code", locationmode="USA-states", color="population", scope='usa', color_continuous_scale=px.colors.sequential.Oranges)
+    elif type == 'sightings':
+        query = f"""
+            SELECT state, COUNT(*) AS total_sightings
+            FROM ufo_sightings
+            GROUP BY state
+            ORDER BY total_sightings DESC
+        """
+        data = pd.read_sql_query(query, con=engine)
+
+        fig = px.choropleth(data, labels={'total_sightings': 'UFO count'}, locations="state", locationmode="USA-states", color="total_sightings", scope='usa', color_continuous_scale=px.colors.sequential.Oranges)
+
+    fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font={'color': 'white'})
+
+    return fig
+
+
 app.layout = html.Div(children=[
-    html.Div(className='row', children=[
-        html.H1(children='UFO Sightings (GROUP F)', style={'textAlign': 'center'}),
-    ], style={'margin': '10px'}),
+    html.Header(className='row', children=[
+        html.Img(className='two columns', src='./assets/logo.png', style={'width': '64px', 'height': '64px'}),
+        html.H3(children='UFO Sightings (GROUP F)'),
+    ], style={'display': 'flex', 'align-items': 'center', 'gap': '10px', 'padding': '10px'}),
 
-    html.Div(children=[
-        html.Div(className='four columns', children=[
-            dcc.Dropdown(cities, None, id='graph-0--city-selection'),
-        ]),
-        html.Div(children=[
-            BooleanSwitch(id='graph-0--day-switch', on=False, color='black')
-        ]),
-        html.Div(children=[
-            BooleanSwitch(id='graph-0--log', on=False, color='black')
-        ]),
-    ], style={'display': 'flex', 'align-items': 'center', 'justify-content': 'flex-end'}),
+    dcc.Tabs([
+        dcc.Tab(label='UFO Sightings', children=[
+            html.Div(className='ufo-tab', children=[
+                html.Div(className='four columns', children=[
+                    html.Div(children='Year', style={'padding': '5px'}),
+                    html.Div(className='row', children=[
+                        dcc.Input(className='input three columns', id="ufo-tab--start", type="number", min=min_year, max=max_year, value=2000),
+                        dcc.Input(className='input three columns', id="ufo-tab--end", type="number", min=min_year, max=max_year, value=2010),
+                    ], style={'padding-bottom': '20px'}),
+                    dcc.RangeSlider(min_year, max_year, 1, id='ufo-tab--slider', value=[2000, 2010], marks=None, tooltip={"placement": "bottom", "always_visible": False}),
 
-    html.Div(className='row', children=[
-        html.Div(className='twelve columns', children=[
-            dcc.Graph(id='graph-0'),
-        ]),
-    ]),
+                    html.Div(className='row', children=[
+                        BooleanSwitch(id='ufo-tab--log', label='LogFN', labelPosition='top', on=False, color='black'),
+                    ], style={'display': 'flex', 'justify-content': 'flex-start', 'margin-bottom': '10px'}),
 
-    html.Div(children=[
-        html.Div(className='four columns', children=[
-            dcc.Dropdown(cities, None, id='graph-1--city-selection'),
-        ]),
-        html.Div(children=[
-            BooleanSwitch(id='graph-1--day-switch', on=False, color='black')
-        ]),
-        html.Div(children=[
-            BooleanSwitch(id='graph-1--log', on=False, color='black')
-        ]),
-    ], style={'display': 'flex', 'align-items': 'center', 'justify-content': 'flex-end'}),
+                    html.Div(children='Time of Day', style={'padding': '5px'}),
+                    dcc.Dropdown(daytime, None, id='ufo-tab--daytime-selection', style={'margin-bottom': '10px'}),
 
-    html.Div(className='row', children=[
-        html.Div(className='twelve columns', children=[
-            dcc.Graph(id='graph-1'),
-        ]),
-    ]),
+                    html.Div(children='State', style={'padding': '5px'}),
+                    dcc.Dropdown(states, None, id='ufo-tab--state-selection', style={'margin-bottom': '10px'}),
 
-    html.Div(children=[
-        html.Div(className='four columns', children=[
-            dcc.Dropdown(cities, None, id='graph-2--city-selection'),
-        ]),
-        html.Div(children=[
-            BooleanSwitch(id='graph-2--day-switch', on=False, color='black')
-        ]),
-        html.Div(children=[
-            BooleanSwitch(id='graph-2--log', on=False, color='black')
-        ]),
-    ], style={'display': 'flex', 'align-items': 'center', 'justify-content': 'flex-end'}),
+                    html.Div(children='City / Town', style={'padding': '5px'}),
+                    dcc.Dropdown(cities, None, id='ufo-tab--city-selection', style={'margin-bottom': '10px'}),
 
-    html.Div(className='row', children=[
-        html.Div(className='twelve columns', children=[
-            dcc.Graph(id='graph-2'),
-        ]),
-    ]),
+                ], style={'display': 'flex', 'flex-direction': 'column'}),
 
-    html.Div(children=[
-        html.Div(className='four columns', children=[
-            dcc.Dropdown(cities, None, id='graph-3--city-selection'),
-        ]),
-        html.Div(children=[
-            BooleanSwitch(id='graph-3--day-switch', on=False, color='black')
-        ]),
-    ], style={'display': 'flex', 'align-items': 'center', 'justify-content': 'flex-end'}),
+                html.Div(className='eight columns', children=[
+                    dcc.Graph(id='ufo-tab--graph'),
+                ]),
+            ]),
+        ], style={'background-color': 'black', 'color': 'white', 'border': '0', 'border-top-left-radius': '10px'}, selected_style={'background-color': '#222222', 'color': 'white', 'border': '0', 'border-top-left-radius': '10px'}),
 
-    html.Div(className='row', children=[
-        html.Div(className='twelve columns', children=[
-            dcc.Graph(id='graph-3'),
-        ]),
-    ]),
+        dcc.Tab(label='UFO Shapes', children=[
+            html.Div(className='shape-tab', children=[
+                html.Div(className='four columns', children=[
+                    html.Div(children='Year', style={'padding': '5px'}),
+                    html.Div(className='row', children=[
+                        dcc.Input(className='input three columns', id="shape-tab--start", type="number", min=min_year, max=max_year, value=2000),
+                        dcc.Input(className='input three columns', id="shape-tab--end", type="number", min=min_year, max=max_year, value=2010),
+                    ], style={'padding-bottom': '20px'}),
+                    dcc.RangeSlider(min_year, max_year, 1, id='shape-tab--slider', value=[2000, 2010], marks=None, tooltip={"placement": "bottom", "always_visible": False}),
 
-    html.Div(children=[
-        html.Div(className='four columns', children=[
-            dcc.Dropdown(cities, None, id='graph-4--city-selection'),
-        ]),
-        html.Div(children=[
-            BooleanSwitch(id='graph-4--day-switch', on=False, color='black')
-        ]),
-    ], style={'display': 'flex', 'align-items': 'center', 'justify-content': 'flex-end'}),
+                    html.Div(children='Time of Day', style={'padding': '5px'}),
+                    dcc.Dropdown(daytime, None, id='shape-tab--daytime-selection', style={'margin-bottom': '10px'}),
 
-    html.Div(className='row', children=[
-        html.Div(className='six columns', children=[
-            dcc.Graph(id='graph-4'),
-        ]),
-        html.Div(className='six columns', children=[
-            dcc.Graph(id='graph-5'),
-        ]),
-    ]),
+                    html.Div(children='State', style={'padding': '5px'}),
+                    dcc.Dropdown(states, None, id='shape-tab--state-selection', style={'margin-bottom': '10px'}),
+
+                    html.Div(children='City / Town', style={'padding': '5px'}),
+                    dcc.Dropdown(cities, None, id='shape-tab--city-selection', style={'margin-bottom': '10px'}),
+
+                ], style={'display': 'flex', 'flex-direction': 'column'}),
+
+                html.Div(className='eight columns', children=[
+                    dcc.Graph(id='shape-tab--graph'),
+                ]),
+            ]),
+        ], style={'background-color': 'black', 'color': 'white', 'border': '0'}, selected_style={'background-color': '#222222', 'color': 'white', 'border': '0'}),
+
+        dcc.Tab(label='Weather', children=[
+            html.Div(className='weather-tab', children=[
+                html.Div(className='twelve columns', children=[
+                    dcc.Dropdown(['Count', 'Duration'], 'Count', id='weather-tab--graph-selection'),
+                ]),
+
+                html.Div(children=[
+                    html.Div(className='four columns', children=[
+                        html.Div(children='Year', style={'padding': '5px'}),
+                        html.Div(className='row', children=[
+                            dcc.Input(className='input three columns', id="weather-tab--start", type="number", min=min_year, max=max_year, value=2000),
+                            dcc.Input(className='input three columns', id="weather-tab--end", type="number", min=min_year, max=max_year, value=2010),
+                        ], style={'padding-bottom': '20px'}),
+                        dcc.RangeSlider(min_year, max_year, 1, id='weather-tab--slider-year', value=[2000, 2010], marks=None, tooltip={"placement": "bottom", "always_visible": False}),
+
+                        html.Div(children='Shape Count', style={'padding': '5px'}),
+                        dcc.Slider(1, len(shapes), 1, id='weather-tab--slider-shape', value=6, marks={i: f'{i}' for i in range(1, len(shapes), 5)}, tooltip={"placement": "bottom", "always_visible": True}),
+
+
+                        html.Div(className='row', children=[
+                            BooleanSwitch(id='weather-tab--log', label='LogFN', labelPosition='top', on=False, color='black'),
+                        ], style={'display': 'flex', 'justify-content': 'flex-start', 'margin-bottom': '10px'}),
+
+                        html.Div(children='Time of Day', style={'padding': '5px'}),
+                        dcc.Dropdown(daytime, None, id='weather-tab--daytime-selection', style={'margin-bottom': '10px'}),
+
+                        html.Div(children='State', style={'padding': '5px'}),
+                        dcc.Dropdown(states, None, id='weather-tab--state-selection', style={'margin-bottom': '10px'}),
+
+                        html.Div(children='City / Town', style={'padding': '5px'}),
+                        dcc.Dropdown(cities, None, id='weather-tab--city-selection', style={'margin-bottom': '10px'}),
+
+                    ], style={'display': 'flex', 'flex-direction': 'column'}),
+
+                    html.Div(className='eight columns', children=[
+                        dcc.Graph(id='weather-tab--graph'),
+                    ]),
+                ], style={'display': 'flex', 'width': '100%', 'align-items': 'center', 'justify-content': 'center'}),
+            ]),
+        ], style={'background-color': 'black', 'color': 'white', 'border': '0'}, selected_style={'background-color': '#222222', 'color': 'white', 'border': '0'}),
+
+        dcc.Tab(label='Heatmaps', children=[
+            html.Div(className='heatmap-tab', children=[
+                html.Div(className='twelve columns', children=[
+                    html.H4(children='UFO Sightings Heatmaps', style={'text-align': 'center'}),
+                    dcc.Graph(figure=density_graph()),
+                ]),
+                html.Div(children=[
+                    html.Div(className='six columns', children=[
+                        dcc.Graph(figure=heatmap_graph('population')),
+                    ]),
+                    html.Div(className='six columns', children=[
+                        dcc.Graph(figure=heatmap_graph('sightings')),
+                    ]),
+                ], style={'display': 'flex', 'width': '100%', 'align-items': 'center', 'justify-content': 'center'}),
+            ]),
+        ], style={'background-color': 'black', 'color': 'white', 'border': '0', 'border-top-right-radius': '10px'}, selected_style={'background-color': '#222222', 'color': 'white', 'border': '0', 'border-top-right-radius': '10px'}),
+    ], style={'margin': '10px 10px 0px'}),
 ])
 
 
 @callback(
-    Output('graph-0', 'figure'),
-    Input('graph-0--city-selection', 'value'),
-    Input('graph-0--day-switch', 'on'),
-    Input('graph-0--log', 'on')
+    Output("ufo-tab--start", "value"),
+    Output("ufo-tab--end", "value"),
+    Output("ufo-tab--slider", "value"),
+    Input("ufo-tab--start", "value"),
+    Input("ufo-tab--end", "value"),
+    Input("ufo-tab--slider", "value"),
 )
-def update_graph(value, on, log):
+def update_slider(start, end, slider):
+    ctx = callback_context
+    trigger_id = ctx.triggered[0]["prop_id"].split(".")[0]
+
+    start_value = start if trigger_id == "ufo-tab--start" else slider[0]
+    end_value = end if trigger_id == "ufo-tab--end" else slider[1]
+    slider_value = slider if trigger_id == "ufo-tab--slider" else [start_value, end_value]
+
+    return start_value, end_value, slider_value
+
+
+@callback(
+    Output("weather-tab--start", "value"),
+    Output("weather-tab--end", "value"),
+    Output("weather-tab--slider-year", "value"),
+    Input("weather-tab--start", "value"),
+    Input("weather-tab--end", "value"),
+    Input("weather-tab--slider-year", "value"),
+)
+def update_slider(start, end, slider):
+    ctx = callback_context
+    trigger_id = ctx.triggered[0]["prop_id"].split(".")[0]
+
+    start_value = start if trigger_id == "ufo-tab--start" else slider[0]
+    end_value = end if trigger_id == "ufo-tab--end" else slider[1]
+    slider_value = slider if trigger_id == "ufo-tab--slider-year" else [start_value, end_value]
+
+    return start_value, end_value, slider_value
+
+
+@callback(
+    Output("shape-tab--start", "value"),
+    Output("shape-tab--end", "value"),
+    Output("shape-tab--slider", "value"),
+    Input("shape-tab--start", "value"),
+    Input("shape-tab--end", "value"),
+    Input("shape-tab--slider", "value"),
+)
+def update_slider(start, end, slider):
+    ctx = callback_context
+    trigger_id = ctx.triggered[0]["prop_id"].split(".")[0]
+
+    start_value = start if trigger_id == "shape-tab--start" else slider[0]
+    end_value = end if trigger_id == "shape-tab--end" else slider[1]
+    slider_value = slider if trigger_id == "shape-tab--slider" else [start_value, end_value]
+
+    return start_value, end_value, slider_value
+
+
+@callback(
+    Output('ufo-tab--graph', 'figure'),
+    Input('ufo-tab--slider', 'value'),
+    Input('ufo-tab--daytime-selection', 'value'),
+    Input('ufo-tab--state-selection', 'value'),
+    Input('ufo-tab--city-selection', 'value'),
+    Input('ufo-tab--log', 'on')
+)
+def update_graph(year, daytime, state, city, log):
+    year_filter = f"EXTRACT(YEAR FROM sigthed_date) BETWEEN {year[0]} AND {year[1]}"
     filters = {
-        'city': value.lower() if value else '',
-        'daytime': 'night' if on else 'day'
+        'daytime': daytime if daytime else '',
+        'state': state if state else '',
+        'city': city.lower() if city else '',
     }
 
-    filter_query = [f'{key} = \'{value}\'' for key, value in filters.items() if value != '']
+    filter_query = ' AND '.join([year_filter] + [f'{key} = \'{value}\'' for key, value in filters.items() if value != ''])
 
     if len(filter_query) > 0:
-        filter_query = 'WHERE ' + ' AND '.join(filter_query)
+        filter_query = 'WHERE ' + filter_query
 
     query = f"""
         SELECT EXTRACT(YEAR FROM sigthed_date) AS year, COUNT(*) AS total_sightings, shape
@@ -153,29 +285,38 @@ def update_graph(value, on, log):
         barmode='stack'
     )
     fig.update_layout(xaxis_title='Year', yaxis_title="Number of UFO")
+    fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font={'color': 'white'})
 
     return fig
 
 
 @callback(
-    Output('graph-1', 'figure'),
-    Input('graph-1--city-selection', 'value'),
-    Input('graph-1--day-switch', 'on'),
-    Input('graph-1--log', 'on')
+    Output('weather-tab--graph', 'figure'),
+    Input('weather-tab--graph-selection', 'value'),
+    Input('weather-tab--slider-year', 'value'),
+    Input('weather-tab--slider-shape', 'value'),
+    Input('weather-tab--daytime-selection', 'value'),
+    Input('weather-tab--state-selection', 'value'),
+    Input('weather-tab--city-selection', 'value'),
+    Input('weather-tab--log', 'on')
 )
-def update_graph(value, on, log):
+def update_graph(type, year, shape_count, daytime, state, city, log):
+    year_filter = f"EXTRACT(YEAR FROM sigthed_date) BETWEEN {year[0]} AND {year[1]}"
     filters = {
-        'city': value.lower() if value else '',
-        'daytime': 'night' if on else 'day'
+        'daytime': daytime if daytime else '',
+        'state': state if state else '',
+        'city': city.lower() if city else '',
     }
 
-    filter_query = [f'{key} = \'{value}\'' for key, value in filters.items() if value != '']
+    filter_query = ' AND '.join([year_filter] + [f'{key} = \'{value}\'' for key, value in filters.items() if value != ''])
 
     if len(filter_query) > 0:
-        filter_query = 'WHERE ' + ' AND '.join(filter_query)
+        filter_query = 'WHERE ' + filter_query
+
+    aggregation = 'COUNT(DISTINCT ufo_sightings.index) AS total' if type == 'Count' else 'SUM(ufo_sightings.duration) / COUNT(DISTINCT ufo_sightings.index) AS total'
 
     query = f"""
-        SELECT DISTINCT 
+        SELECT DISTINCT
             CASE WHEN ufo_sightings.shape IN (
                 SELECT shape
                 FROM (
@@ -184,12 +325,12 @@ def update_graph(value, on, log):
                     {filter_query}
                     GROUP BY shape
                     ORDER BY count DESC
-                    LIMIT 7
+                    LIMIT {int(shape_count)}
                 ) AS top_shapes
             ) THEN ufo_sightings.shape
             END AS shape,
             weather.label,
-            COUNT(DISTINCT ufo_sightings.index) AS total_sightings
+            {aggregation}
         FROM ufo_sightings
         LEFT JOIN weather ON ufo_sightings.sigthed_date = weather.date
             AND ufo_sightings.lat = weather.latitude
@@ -198,104 +339,44 @@ def update_graph(value, on, log):
         GROUP BY shape, weather.label
         ORDER BY shape, weather.label
     """
-
     ufo_sightings = pd.read_sql_query(query, con=engine)
-
     ufo_sightings = ufo_sightings.groupby(['shape', 'label']).sum().reset_index()
 
     fig = px.bar(
         ufo_sightings,
         x='label',
-        y='total_sightings',
+        y='total',
         log_y=log,
         color='shape',
         category_orders={'shape': shapes, 'label': weather_condition},
-        labels={'total_sightings': 'count', 'label': 'weather'},
-        title='Total UFO Sightings by Shape and Weather',
+        labels={'total': type.lower(), 'label': 'weather'},
+        title=f'Total {type} UFO Sightings by Shape and Weather',
         barmode='group'
     )
-    fig.update_layout(xaxis_title='Weather condition', yaxis_title="Number of UFO")
-
+    fig.update_layout(xaxis_title='Weather condition', yaxis_title=f'{type} of UFO')
+    fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font={'color': 'white'})
     return fig
 
 
 @callback(
-    Output('graph-2', 'figure'),
-    Input('graph-2--city-selection', 'value'),
-    Input('graph-2--day-switch', 'on'),
-    Input('graph-2--log', 'on')
+    Output('shape-tab--graph', 'figure'),
+    Input('shape-tab--slider', 'value'),
+    Input('shape-tab--daytime-selection', 'value'),
+    Input('shape-tab--state-selection', 'value'),
+    Input('shape-tab--city-selection', 'value'),
 )
-def update_graph(value, on, log):
+def update_graph(year, daytime, state, city):
+    year_filter = f"EXTRACT(YEAR FROM sigthed_date) BETWEEN {year[0]} AND {year[1]}"
     filters = {
-        'city': value.lower() if value else '',
-        'daytime': 'night' if on else 'day'
+        'daytime': daytime if daytime else '',
+        'state': state if state else '',
+        'city': city.lower() if city else '',
     }
 
-    filter_query = [f'{key} = \'{value}\'' for key, value in filters.items() if value != '']
+    filter_query = ' AND '.join([year_filter] + [f'{key} = \'{value}\'' for key, value in filters.items() if value != ''])
 
     if len(filter_query) > 0:
-        filter_query = 'WHERE ' + ' AND '.join(filter_query)
-
-    query = f"""
-        SELECT DISTINCT 
-            CASE WHEN ufo_sightings.shape IN (
-                SELECT shape
-                FROM (
-                    SELECT shape, COUNT(*) AS count
-                    FROM ufo_sightings
-                    {filter_query}
-                    GROUP BY shape
-                    ORDER BY count DESC
-                    LIMIT 7
-                ) AS top_shapes
-            ) THEN ufo_sightings.shape
-            END AS shape,
-            weather.label,
-    	    SUM(ufo_sightings.duration) / COUNT(DISTINCT ufo_sightings.index) AS total_duration
-        FROM ufo_sightings
-        LEFT JOIN weather ON ufo_sightings.sigthed_date = weather.date
-            AND ufo_sightings.lat = weather.latitude
-            AND ufo_sightings.lng = weather.longitude
-        {filter_query}
-        GROUP BY shape, weather.label
-        ORDER BY shape, weather.label
-    """
-
-    ufo_sightings = pd.read_sql_query(query, con=engine)
-
-    ufo_sightings = ufo_sightings.groupby(['shape', 'label']).sum().reset_index()
-
-    fig = px.bar(
-        ufo_sightings,
-        x='label',
-        y='total_duration',
-        log_y=log,
-        category_orders={'shape': shapes, 'label': weather_condition},
-        color='shape',
-        labels={'total_duration': 'duration'},
-        title='Total UFO Duration by Shape and Weather',
-        barmode='group'
-    )
-    fig.update_layout(xaxis_title='Weather condition', yaxis_title="Total Duration (seconds)")
-
-    return fig
-
-
-@callback(
-    Output('graph-3', 'figure'),
-    Input('graph-3--city-selection', 'value'),
-    Input('graph-3--day-switch', 'on')
-)
-def update_graph(value, on):
-    filters = {
-        'city': value.lower() if value else '',
-        'daytime': 'night' if on else 'day'
-    }
-
-    filter_query = [f'{key} = \'{value}\'' for key, value in filters.items() if value != '']
-
-    if len(filter_query) > 0:
-        filter_query = 'WHERE ' + ' AND '.join(filter_query)
+        filter_query = 'WHERE ' + filter_query
 
     query = f"""
         SELECT shape, COUNT(*) AS total_sightings
@@ -315,53 +396,10 @@ def update_graph(value, on):
         labels={'total_sightings': 'count'},
     )
 
-    return fig
-
-
-@callback(
-    Output('graph-4', 'figure'),
-    Input('graph-4--city-selection', 'value'),
-    Input('graph-4--day-switch', 'on')
-)
-def update_graph(value, on):
-    filters = {
-        'city': value.lower() if value else '',
-        'daytime': 'night' if on else 'day'
-    }
-
-    filter_query = [f'{key} = \'{value}\'' for key, value in filters.items() if value != '']
-
-    if len(filter_query) > 0:
-        filter_query = 'WHERE ' + ' AND '.join(filter_query)
-
-    query = f"""
-        SELECT lat, lng, COUNT(*) AS total_sightings
-        FROM ufo_sightings
-        {filter_query}
-        GROUP BY lat, lng
-        ORDER BY total_sightings DESC
-    """
-
-    ufo_sightings = pd.read_sql_query(query, con=engine)
-    fig = px.density_mapbox(ufo_sightings, lat='lat', lon='lng', z='total_sightings', labels={'total_sightings': 'count'}, radius=10, center=dict(lat=39.8283, lon=-98.5795), zoom=3, mapbox_style="open-street-map")
-    # fig = px.choropleth(ufo_sightings, locations="state", locationmode="USA-states", color="total_sightings", scope='usa', color_continuous_scale=px.colors.sequential.Oranges)
-
-    return fig
-
-
-@callback(
-    Output('graph-5', 'figure'),
-    Input('graph-4--city-selection', 'value'),
-    Input('graph-4--day-switch', 'on')
-)
-def update_graph(value, on):
-    df = pd.read_csv('population.csv')
-
-    # fig = px.density_mapbox(ufo_sightings, lat='lat', lon='lng', z='total_sightings', labels={'total_sightings': 'count'}, radius=10, center=dict(lat=39.8283, lon=-98.5795), zoom=3, mapbox_style="open-street-map")
-    fig = px.choropleth(df, locations="code", locationmode="USA-states", color="population", scope='usa', color_continuous_scale=px.colors.sequential.Oranges)
+    fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font={'color': 'white'})
 
     return fig
 
 
 if __name__ == '__main__':
-    app.run(host="10.16.121.111", debug=True)
+    app.run(host="10.17.117.5", debug=False)
