@@ -6,7 +6,9 @@ from datetime import timedelta
 import time
 import random
 
-engine = create_engine('postgresql://postgres:postgres@10.17.117.5:5432/ufo')
+HOST = "127.0.0.1"
+
+engine = create_engine(f'postgresql://postgres:postgres@{HOST}:5432/ufo')
 
 
 def load_sigthings(filename):
@@ -72,32 +74,6 @@ def label_wmo(code):
         return "Thunderstorm"
     elif code in [96, 99]:
         return "Thunderstorm with hail"
-
-
-def fetch_weather(ufo_id, date, lat, lng):
-    hour = date.hour
-    weather_api = "https://archive-api.open-meteo.com/v1/archive"
-
-    params = {
-        'latitude': lat,
-        'longitude': lng,
-        'start_date': date.strftime('%Y-%m-%d'),
-        'end_date': date.strftime('%Y-%m-%d'),
-        "hourly": ["weathercode"],
-    }
-
-    response = requests.get(weather_api, params=params)
-    if response.status_code == 200:
-        data = response.json()
-        weathercode = int(data.get('hourly', {}).get('weathercode', [])[hour])
-        label = label_wmo(data.get('hourly', {}).get('weathercode', [])[hour])
-        elevation = data.get('elevation', 0)
-        print(f"Fetching weather for {ufo_id} at {date}")
-        print(f"weathercode: {weathercode}")
-        print("=====================================")
-        return date, weathercode, label, elevation, ufo_id
-    else:
-        return None
 
 
 def load_weather():
@@ -170,11 +146,24 @@ def load_weather():
             errors.append(i)
             print(errors)
 
-    # weather_data = df.apply(lambda row: fetch_weather(row['index'], row['sigthed_date'], row['lat'], row['lng']), axis=1)
-# [339, 356]
-#
+
+def load_population():
+    df = pd.read_csv("population.csv")
+
+    df.columns = ['code', 'state', 'population']
+
+    df_schema = {
+        'code': String(255),
+        'state': String(255),
+        'population': Integer(),
+    }
+
+    df.to_sql('population', engine, if_exists='replace', index=False, dtype=df_schema)
+
+    return df
 
 
 if __name__ == "__main__":
     # load_sigthings("ufo_sightings.csv")
-    load_weather()
+    # load_population()
+    pass

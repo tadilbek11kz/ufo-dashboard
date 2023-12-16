@@ -1,16 +1,19 @@
 import pandas as pd
 import plotly.express as px
-# import folium
 from sqlalchemy import create_engine
 from dash import Dash, html, dcc, callback, Output, Input, callback_context
 from dash_daq import BooleanSwitch
+import os
+
+HOST = os.getenv('HOST', '10.16.121.111')
+DEBUG = os.getenv('DEBUG', False)
 
 pd.options.plotting.backend = "plotly"
 
 external_stylesheets = ['https://codepen.io/chriddyp/pen/bWLwgP.css']
 app = Dash(__name__, external_stylesheets=external_stylesheets)
 
-engine = create_engine('postgresql://postgres:postgres@10.17.117.5:5432/ufo')
+engine = create_engine(f'postgresql://postgres:postgres@{HOST}:5432/ufo')
 
 cities = pd.read_sql_query('SELECT DISTINCT city FROM ufo_sightings', con=engine).sort_values(by='city').apply(lambda x: x.str.capitalize())['city'].tolist()
 states = pd.read_sql_query('SELECT DISTINCT state FROM ufo_sightings', con=engine).sort_values(by='state')['state'].tolist()
@@ -19,9 +22,6 @@ weather_condition = pd.read_sql_query('SELECT DISTINCT label FROM weather', con=
 max_year = pd.read_sql_query('SELECT MAX(EXTRACT(YEAR FROM sigthed_date)) AS max_year FROM ufo_sightings', con=engine)['max_year'].tolist()[0]
 min_year = pd.read_sql_query('SELECT MIN(EXTRACT(YEAR FROM sigthed_date)) AS min_year FROM ufo_sightings', con=engine)['min_year'].tolist()[0]
 daytime = pd.read_sql_query('SELECT DISTINCT daytime FROM ufo_sightings', con=engine)['daytime'].tolist()
-
-# ufo_sightings = pd.read_sql_query('SELECT * FROM ufo_sightings', con=engine)
-# weather = pd.read_sql_query('SELECT * FROM weather', con=engine)
 
 
 def density_graph():
@@ -39,11 +39,16 @@ def density_graph():
     return fig
 
 
-def heatmap_graph(type):
+def heatmap_graph(type, normilize=False):
     if type == 'population':
-        data = pd.read_csv('population.csv')
+        query = f"""
+            SELECT state, population, code
+            FROM population
+        """
+        data = pd.read_sql_query(query, con=engine)
+
         fig = px.choropleth(data, locations="code", locationmode="USA-states", color="population", scope='usa', color_continuous_scale=px.colors.sequential.Oranges)
-    elif type == 'sightings':
+    elif type == 'sightings' and not normilize:
         query = f"""
             SELECT state, COUNT(*) AS total_sightings
             FROM ufo_sightings
@@ -53,6 +58,19 @@ def heatmap_graph(type):
         data = pd.read_sql_query(query, con=engine)
 
         fig = px.choropleth(data, labels={'total_sightings': 'UFO count'}, locations="state", locationmode="USA-states", color="total_sightings", scope='usa', color_continuous_scale=px.colors.sequential.Oranges)
+
+    elif type == 'sightings' and normilize:
+        query = f"""
+            SELECT 
+                ufo_sightings.state,
+                COUNT(DISTINCT ufo_sightings.id) / population.population::numeric as total_sightings
+            FROM ufo_sightings
+            LEFT JOIN population ON ufo_sightings.state = population.code
+            GROUP BY ufo_sightings.state, population.population
+        """
+        data = pd.read_sql_query(query, con=engine)
+
+        fig = px.choropleth(data, labels={'total_sightings': 'UFO/Person count'}, locations="state", locationmode="USA-states", color="total_sightings", scope='usa', color_continuous_scale=px.colors.sequential.Oranges)
 
     fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font={'color': 'white'})
 
@@ -179,6 +197,9 @@ app.layout = html.Div(children=[
                         dcc.Graph(figure=heatmap_graph('sightings')),
                     ]),
                 ], style={'display': 'flex', 'width': '100%', 'align-items': 'center', 'justify-content': 'center'}),
+                html.Div(className='twelve columns', children=[
+                    dcc.Graph(figure=heatmap_graph('sightings', True)),
+                ]),
             ]),
         ], style={'background-color': 'black', 'color': 'white', 'border': '0', 'border-top-right-radius': '10px'}, selected_style={'background-color': '#222222', 'color': 'white', 'border': '0', 'border-top-right-radius': '10px'}),
     ], style={'margin': '10px 10px 0px'}),
@@ -313,7 +334,7 @@ def update_graph(type, year, shape_count, daytime, state, city, log):
     if len(filter_query) > 0:
         filter_query = 'WHERE ' + filter_query
 
-    aggregation = 'COUNT(DISTINCT ufo_sightings.index) AS total' if type == 'Count' else 'SUM(ufo_sightings.duration) / COUNT(DISTINCT ufo_sightings.index) AS total'
+    aggregation = 'COUNT(DISTINCT ufo_sightings.id) AS total' if type == 'Count' else 'SUM(ufo_sightings.duration) / COUNT(DISTINCT ufo_sightings.id) AS total'
 
     query = f"""
         SELECT DISTINCT
@@ -402,4 +423,4 @@ def update_graph(year, daytime, state, city):
 
 
 if __name__ == '__main__':
-    app.run(host="10.17.117.5", debug=False)
+    app.run(host=HOST, debug=DEBUG)
